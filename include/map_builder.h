@@ -5,6 +5,13 @@
 #include <chrono>
 #include <opencv2/opencv.hpp>
 #include <Eigen/Core>
+#include <Eigen/Geometry>
+#include <memory>
+#include <queue>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <ros/ros.h>
 
 #include "super_glue.h"
 #include "read_configs.h"
@@ -18,6 +25,7 @@
 #include "map.h"
 #include "ros_publisher.h"
 #include "g2o_optimization/types.h"
+#include "ekf_optimization/ekf_estimator.h"
 
 struct InputData{
   size_t index;
@@ -61,9 +69,13 @@ struct TrackingData{
 };
 typedef std::shared_ptr<TrackingData> TrackingDataPtr;
 
-class MapBuilder{
+namespace AirSLAM {
+
+class MapBuilder {
 public:
   MapBuilder(VisualOdometryConfigs& configs, ros::NodeHandle nh);
+  ~MapBuilder();
+
   bool UseIMU();
   void AddInput(InputDataPtr data);
   void ExtractFeatureThread();
@@ -73,7 +85,7 @@ public:
 
   int FramePoseOptimization(FramePtr frame0, FramePtr frame, std::vector<MappointPtr>& mappoints, std::vector<int>& inliers, 
       Preinteration& preinteration);
-  int AddKeyframeCheck(FramePtr ref_keyframe, FramePtr current_frame, const std::vector<cv::DMatch>&);
+  int AddKeyframeCheck(FramePtr ref_frame, FramePtr current_frame, std::vector<cv::DMatch>& matches);
   void InsertKeyframe(FramePtr frame);
 
   void PublishFrame(FramePtr frame, cv::Mat& image, FrameType frame_type, std::vector<cv::DMatch>& matches);
@@ -84,48 +96,58 @@ public:
   void Stop();
   bool IsStopped();
 
+private:
+  void MatchLines(std::vector<std::map<int, double>>& ref_points_on_lines, 
+                 std::vector<std::map<int, double>>& current_points_on_lines,
+                 std::vector<cv::DMatch>& point_matches,
+                 int ref_num_points,
+                 int current_num_points,
+                 std::vector<int>& line_matches);
 
 private:
-  // left feature extraction and tracking thread
-  std::mutex _buffer_mutex;
-  std::queue<InputDataPtr> _data_buffer;
-  std::thread _feature_thread;
-
-  // pose estimation thread
-  std::mutex _tracking_mutex;
-  std::queue<TrackingDataPtr> _tracking_data_buffer;
-  std::thread _tracking_thread;
-
-  std::mutex _stop_mutex;
-  bool _shutdown;
-  bool _feature_thread_stop;
-  bool _tracking_trhead_stop;
-
-  // tmp 
-  bool _init;
-  bool _insert_next_keyframe;
+  std::atomic<bool> _shutdown;
+  std::atomic<bool> _feature_thread_stop;
+  std::atomic<bool> _tracking_trhead_stop;
+  std::atomic<bool> _init;
+  std::atomic<bool> _insert_next_keyframe;
   int _track_id;
   int _line_track_id;
+
+  VisualOdometryConfigs& _configs;
+  std::shared_ptr<Camera> _camera;
+  std::shared_ptr<PointMatcher> _point_matcher;
+  std::shared_ptr<FeatureDetector> _feature_detector;
+  std::shared_ptr<RosPublisher> _ros_publisher;
+  std::shared_ptr<Map> _map;
+
+  // EKF状态估计器
+  std::shared_ptr<EKFEstimator> _ekf_estimator;
+  bool _use_ekf;
+
+  std::queue<InputDataPtr> _data_buffer;
+  std::mutex _buffer_mutex;
+
+  std::queue<TrackingDataPtr> _tracking_data_buffer;
+  std::mutex _tracking_mutex;
+
+  std::mutex _stop_mutex;
+
+  std::thread _feature_thread;
+  std::thread _tracking_thread;
+
   FramePtr _last_keyframe_feature;
   FramePtr _last_keyframe_tracking;
   FramePtr _last_tracked_frame;
   cv::Mat _last_keyimage;
 
+  // for publishing
   cv::Mat key_image_pub;
   int key_image_id_pub;
   std::vector<cv::KeyPoint> keyframe_keypoints_pub;
 
-  // for imu
   Preinteration _preinteration_keyframe;
-
-private:
-  // class
-  VisualOdometryConfigs _configs;
-  CameraPtr _camera;
-  PointMatcherPtr _point_matcher;
-  FeatureDetectorPtr _feature_detector;
-  RosPublisherPtr _ros_publisher;
-  MapPtr _map;
 };
+
+} // namespace AirSLAM
 
 #endif  // MAP_BUILDER_H_

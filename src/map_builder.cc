@@ -20,6 +20,7 @@
 #include "g2o_optimization/g2o_optimization.h"
 #include "timer.h"
 #include "debug.h"
+using namespace AirSLAM;
 
 MapBuilder::MapBuilder(VisualOdometryConfigs& configs, ros::NodeHandle nh): _shutdown(false), _feature_thread_stop(false), 
     _tracking_trhead_stop(false), _init(false), _insert_next_keyframe(false), _track_id(0), _line_track_id(0), _configs(configs){

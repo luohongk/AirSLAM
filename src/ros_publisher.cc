@@ -28,7 +28,20 @@ RosPublisher::RosPublisher(const RosPublisherConfig& ros_publisher_config, ros::
         cv::putText(result, frame_info, cv::Point(10+drawed_image.cols*2, 30), cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 0, 255), 2);
       }
 
-      sensor_msgs::ImagePtr ros_feature_msg = cv_bridge::CvImage(std_msgs::Header(), "bgr8", result).toImageMsg();
+      // 根据图像通道数选择正确的编码格式
+      std::string encoding;
+      if (result.channels() == 1) {
+        encoding = "mono8";
+      } else if (result.channels() == 3) {
+        encoding = "bgr8";
+      } else if (result.channels() == 4) {
+        encoding = "bgra8";
+      } else {
+        std::cerr << "Unsupported number of channels: " << result.channels() << std::endl;
+        return;
+      }
+
+      sensor_msgs::ImagePtr ros_feature_msg = cv_bridge::CvImage(std_msgs::Header(), encoding, result).toImageMsg();
       ros_feature_msg->header.stamp = ros::Time().fromSec(feature_message->time);
       _ros_feature_pub.publish(ros_feature_msg);
     };

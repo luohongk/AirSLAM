@@ -198,6 +198,40 @@ struct RosPublisherConfig{
   std::string reloc_topic;
 };
 
+struct EKFConfig {
+  struct ProcessNoise {
+    double position;
+    double velocity;
+    double attitude;
+    double bias_acc;
+    double bias_gyro;
+  } process_noise;
+
+  struct MeasurementNoise {
+    double position;
+    double velocity;
+    double attitude;
+  } measurement_noise;
+
+  int use_ekf;
+
+  EKFConfig() {}
+  void Load(const YAML::Node& ekf_node) {
+    use_ekf = ekf_node["use_ekf"].as<int>();
+    
+    const YAML::Node& process_noise_node = ekf_node["process_noise"];
+    process_noise.position = process_noise_node["position"].as<double>();
+    process_noise.velocity = process_noise_node["velocity"].as<double>();
+    process_noise.attitude = process_noise_node["attitude"].as<double>();
+    process_noise.bias_acc = process_noise_node["bias_acc"].as<double>();
+    process_noise.bias_gyro = process_noise_node["bias_gyro"].as<double>();
+    
+    const YAML::Node& measurement_noise_node = ekf_node["measurement_noise"];
+    measurement_noise.position = measurement_noise_node["position"].as<double>();
+    measurement_noise.velocity = measurement_noise_node["velocity"].as<double>();
+    measurement_noise.attitude = measurement_noise_node["attitude"].as<double>();
+  }
+};
 
 struct VisualOdometryConfigs{
   std::string dataroot;
@@ -213,6 +247,7 @@ struct VisualOdometryConfigs{
   OptimizationConfig tracking_optimization_config;
   OptimizationConfig backend_optimization_config;
   RosPublisherConfig ros_publisher_config;
+  EKFConfig ekf_config;
 
   VisualOdometryConfigs() {}
 
@@ -237,6 +272,7 @@ struct VisualOdometryConfigs{
     tracking_optimization_config.Load(file_node["optimization"]["tracking"]);
     backend_optimization_config.Load(file_node["optimization"]["backend"]);
     ros_publisher_config.Load(file_node["ros_publisher"]);
+    ekf_config.Load(file_node["ekf"]);
   }
 };
 

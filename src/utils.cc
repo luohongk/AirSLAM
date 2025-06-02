@@ -1,4 +1,3 @@
-
 #include "utils.h"
 #include <dirent.h>
 #include <Eigen/Core>
@@ -76,7 +75,15 @@ double CalculateStdDev(const std::vector<double>& data) {
 cv::Mat DrawFeatures(const cv::Mat& image, const std::vector<cv::KeyPoint>& keypoints, 
     const std::vector<Eigen::Vector4d>& lines, bool draw_on_one){
   cv::Mat img_color;
-  cv::cvtColor(image, img_color, cv::COLOR_GRAY2RGB);
+  // 检查输入图像的通道数
+  if (image.channels() == 1) {
+    cv::cvtColor(image, img_color, cv::COLOR_GRAY2RGB);
+  } else if (image.channels() == 3) {
+    img_color = image.clone();
+  } else {
+    std::cerr << "DrawFeatures: Unsupported number of channels: " << image.channels() << std::endl;
+    return image;
+  }
 
   // draw points
   for(size_t j = 0; j < keypoints.size(); j++){
@@ -106,7 +113,15 @@ cv::Mat DrawFeatures(const cv::Mat& image, const std::vector<cv::KeyPoint>& keyp
     const std::vector<bool>& inliers, const std::vector<Eigen::Vector4d>& lines, 
     const std::vector<int>& line_track_ids, const std::vector<std::map<int, double>>& points_on_lines){
   cv::Mat img_color;
-  cv::cvtColor(image, img_color, cv::COLOR_GRAY2RGB);
+  // 检查输入图像的通道数
+  if (image.channels() == 1) {
+    cv::cvtColor(image, img_color, cv::COLOR_GRAY2RGB);
+  } else if (image.channels() == 3) {
+    img_color = image.clone();
+  } else {
+    std::cerr << "DrawFeatures: Unsupported number of channels: " << image.channels() << std::endl;
+    return image;
+  }
 
   size_t point_num = keypoints.size();
   std::vector<cv::Scalar> colors(point_num, cv::Scalar(0, 255, 0));
@@ -142,6 +157,20 @@ cv::Mat DrawFeatures(const cv::Mat& image, const std::vector<cv::KeyPoint>& keyp
 
 cv::Mat DrawMatches(const cv::Mat& ref_image, const cv::Mat& image, const std::vector<cv::KeyPoint>& ref_kpts, 
     const std::vector<cv::KeyPoint>& kpts, const std::vector<cv::DMatch>& matches){
+
+  // 确保两个图像都是彩色图像
+  cv::Mat ref_color, img_color;
+  if (ref_image.channels() == 1) {
+    cv::cvtColor(ref_image, ref_color, cv::COLOR_GRAY2BGR);
+  } else {
+    ref_color = ref_image;
+  }
+  
+  if (image.channels() == 1) {
+    cv::cvtColor(image, img_color, cv::COLOR_GRAY2BGR);
+  } else {
+    img_color = image;
+  }
 
   cv::Mat merged_image;
   cv::hconcat(ref_image, image, merged_image);
