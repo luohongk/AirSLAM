@@ -18,6 +18,9 @@
 #include "map.h"
 #include "ros_publisher.h"
 #include "g2o_optimization/types.h"
+#include "ekf_optimization/ekf_estimator.h"
+#include "ekf_optimization/ekf_state.h"
+using namespace AirSLAM;
 
 struct InputData{
   size_t index;
@@ -126,6 +129,10 @@ private:
   FeatureDetectorPtr _feature_detector;
   RosPublisherPtr _ros_publisher;
   MapPtr _map;
+
+  // EKF状态估计器
+  std::shared_ptr<AirSLAM::EKFEstimator> _ekf_estimator;
+
 };
 
 #endif  // MAP_BUILDER_H_

@@ -30,6 +30,11 @@ MapBuilder::MapBuilder(VisualOdometryConfigs& configs, ros::NodeHandle nh): _shu
   _ros_publisher = std::shared_ptr<RosPublisher>(new RosPublisher(configs.ros_publisher_config, nh));
   _map = std::shared_ptr<Map>(new Map(_configs.backend_optimization_config, _camera, _ros_publisher));
 
+  // 初始化ekf状态估计器
+  if(configs.ekf_config.use_ekf){
+      _ekf_estimator = std::make_shared<AirSLAM::EKFEstimator>();
+  }
+
   _feature_thread = std::thread(boost::bind(&MapBuilder::ExtractFeatureThread, this));
   _tracking_thread = std::thread(boost::bind(&MapBuilder::TrackingThread, this));
 }
@@ -154,73 +159,146 @@ void MapBuilder::ExtractFeatureThread(){
   _stop_mutex.unlock();
 }
 
-void MapBuilder::TrackingThread(){ 
-  while(!_shutdown || !_data_buffer.empty() || !_tracking_data_buffer.empty()){
-    if(_tracking_data_buffer.empty()){
+void MapBuilder::TrackingThread()
+{
+  while (!_shutdown || !_data_buffer.empty() || !_tracking_data_buffer.empty())
+  {
+    if (_tracking_data_buffer.empty())
+    {
       usleep(2000);
       continue;
     }
 
     TrackingDataPtr tracking_data;
-    _tracking_mutex.lock();
-    tracking_data = _tracking_data_buffer.front();
-    _tracking_data_buffer.pop();
-    _tracking_mutex.unlock();
+      _tracking_mutex.lock();
+      tracking_data = _tracking_data_buffer.front();
+      _tracking_data_buffer.pop();
+      _tracking_mutex.unlock();
 
-    FramePtr frame = tracking_data->frame;
-    FrameType frame_type = tracking_data->frame_type;
-    FramePtr ref_keyframe = tracking_data->ref_keyframe;
-    InputDataPtr input_data = tracking_data->input_data;
-    std::vector<cv::DMatch> matches = tracking_data->matches;
+      FramePtr frame = tracking_data->frame;
+      FrameType frame_type = tracking_data->frame_type;
+      FramePtr ref_keyframe = tracking_data->ref_keyframe;
+      InputDataPtr input_data = tracking_data->input_data;
+      std::vector<cv::DMatch> matches = tracking_data->matches;
 
-    double timestamp = input_data->time;
-    cv::Mat image_left_rect = input_data->image_left.clone();
-    cv::Mat image_right_rect = input_data->image_right.clone();
-    ImuDataList batch_imu_data = input_data->batch_imu_data;
+      double timestamp = input_data->time;
+      cv::Mat image_left_rect = input_data->image_left.clone();
+      cv::Mat image_right_rect = input_data->image_right.clone();
+      ImuDataList batch_imu_data = input_data->batch_imu_data;
 
-    if(frame_type == FrameType::InitializationFrame){
-      Eigen::Matrix4d init_pose;
-      init_pose << 1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 1, 0, 0, 0, 1;
-      // init_pose = Eigen::Matrix4d::Identity();
-      frame->SetPose(init_pose);
-      frame->SetPoseFixed(true);
-      frame->SetVelocaity(Eigen::Vector3d::Zero());
+      std::cout<< "Use EKF: " << _configs.ekf_config.use_ekf<< std::endl;
 
-      _preinteration_keyframe.SetBias(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), false);
+    if (_configs.ekf_config.use_ekf==0)
+    {
+      if (frame_type == FrameType::InitializationFrame)
+      {
+        Eigen::Matrix4d init_pose;
+        init_pose << 1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 1, 0, 0, 0, 1;
+        // init_pose = Eigen::Matrix4d::Identity();
+        frame->SetPose(init_pose);
+        frame->SetPoseFixed(true);
+        frame->SetVelocaity(Eigen::Vector3d::Zero());
+
+        _preinteration_keyframe.SetBias(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero(), false);
+        frame->SetIMUPreinteration(_preinteration_keyframe);
+
+        InsertKeyframe(frame);
+        _last_keyframe_tracking = frame;
+        _last_tracked_frame = frame;
+        _last_keyimage = image_left_rect;
+
+        PublishFrame(frame, image_left_rect, frame_type, matches);
+        continue;
+      }
+
+      // SaveTrackingResult(_last_keyimage, image_left_rect, ref_keyframe, frame, matches, _configs.saving_dir);
+
+      // IMU preinteration
+      _preinteration_keyframe.AddBatchData(batch_imu_data, ref_keyframe->GetTimestamp(), timestamp);
       frame->SetIMUPreinteration(_preinteration_keyframe);
 
-      InsertKeyframe(frame);
-      _last_keyframe_tracking = frame;
-      _last_tracked_frame = frame;
-      _last_keyimage = image_left_rect;
+      int track_inliers = TrackFrame(ref_keyframe, frame, matches, _preinteration_keyframe);
+
+      frame->SetPreviousFrame(ref_keyframe);
+
+      if (track_inliers > _configs.keyframe_config.lost_num_match)
+      {
+        _last_tracked_frame = frame;
+      }
+
+      if (frame_type == FrameType::KeyFrame)
+      {
+        std::cout << "insert keyframe, id = " << frame->GetFrameId() << std::endl;
+        InsertKeyframe(frame);
+        _last_keyframe_tracking = frame;
+        _last_keyimage = image_left_rect;
+      }
 
       PublishFrame(frame, image_left_rect, frame_type, matches);
-      continue;
     }
 
-    // SaveTrackingResult(_last_keyimage, image_left_rect, ref_keyframe, frame, matches, _configs.saving_dir);
+    else
+    {
+      // 使用EKF进行状态估计
+      std::cout << "[TrackingThread] Using EKF for state estimation" << std::endl;
 
-    // IMU preinteration
-    _preinteration_keyframe.AddBatchData(batch_imu_data, ref_keyframe->GetTimestamp(), timestamp);
-    frame->SetIMUPreinteration(_preinteration_keyframe);
+      // 检查EKF估计器是否初始化
+      if (!_ekf_estimator)
+      {
+        std::cerr << "[TrackingThread] EKF estimator not initialized!" << std::endl;
+        continue;
+      }
 
-    int track_inliers = TrackFrame(ref_keyframe, frame, matches, _preinteration_keyframe);
+      EKFState& ekf_state = _ekf_estimator->getState();
 
-    frame->SetPreviousFrame(ref_keyframe);
+      // EKF预测步骤（使用预积分，根据上一帧的位姿速度预测下一帧的位姿速度）
+      const ImuData& imu_data = batch_imu_data[0];
 
-    if(track_inliers > _configs.keyframe_config.lost_num_match){ 
-      _last_tracked_frame = frame;
+      // 打印IMU数据
+      std::cout << "IMU Data: Timestamp = " << imu_data.timestamp 
+                << ", Gyro = [" << imu_data.gyr.transpose() 
+                << "], Acc = [" << imu_data.acc.transpose() << "]" << std::endl;
+      _ekf_estimator->predict(imu_data, ekf_state);
+
+
+      // EKF更新步骤
+      _ekf_estimator->update(frame,ekf_state);
+
+      // 从EKF获取状态估计结果
+      const EKFState &state = _ekf_estimator->getState();
+
+      // 构造位姿矩阵
+      Eigen::Matrix4d ekf_pose = Eigen::Matrix4d::Identity();
+      ekf_pose.block<3, 1>(0, 3) = state.getPosition();
+      Eigen::Quaterniond q = state.getAttitude();
+      q.normalize(); // 再次确保四元数归一化
+      ekf_pose.block<3, 3>(0, 0) = q.toRotationMatrix();
+
+      // 更新帧的位姿为EKF估计的位姿
+      frame->SetPose(ekf_pose);
+      frame->SetVelocaity(state.getVelocity());
+
+      // 打印位姿信息
+      Eigen::Vector3d position = state.getPosition();
+      Eigen::Quaterniond quaternion = state.getAttitude();
+      std::cout << "=== EKF Pose at frame " << frame->GetFrameId() << " ===" << std::endl;
+      std::cout << "Position: [" << position.x() << ", " << position.y() << ", " << position.z() << "]" << std::endl;
+      std::cout << "Quaternion: [" << quaternion.w() << ", " << quaternion.x() << ", " << quaternion.y() << ", " << quaternion.z() << "]" << std::endl;
+      std::cout << "Velocity: [" << state.getVelocity().x() << ", " << state.getVelocity().y() << ", " << state.getVelocity().z() << "]" << std::endl;
+      std::cout << "=============================================" << std::endl;
+
+      // 打开文件（追加写入模式）
+      std::ofstream outfile("/root/catkin_ws/src/AirSLAM/pose_log.txt", std::ios::app);
+      if (outfile.is_open()) {
+          outfile << position.x() << " " << position.y() << " " << position.z() << " "
+                  << quaternion.x() << " " << quaternion.y() << " "
+                  << quaternion.z() << " " << quaternion.w() << std::endl;
+          outfile.close();
+      } else {
+          std::cerr << "Failed to open pose_log.txt!" << std::endl;
+      }
     }
-
-    if(frame_type == FrameType::KeyFrame){
-      std::cout << "insert keyframe, id = " << frame->GetFrameId() << std::endl;
-      InsertKeyframe(frame);
-      _last_keyframe_tracking = frame;
-      _last_keyimage = image_left_rect;
-    }
-
-    PublishFrame(frame, image_left_rect, frame_type, matches);
-  }  
+  }
 
   _stop_mutex.lock();
   _tracking_trhead_stop = true;

@@ -85,6 +85,8 @@ add_library(${PROJECT_NAME}_lib SHARED
   src/map_user.cc
   src/timer.cc
   src/debug.cc
+  src/ekf_optimization/ekf_estimator.cc
+  src/ekf_optimization/ekf_state.cc
 )
 
 target_link_libraries(${PROJECT_NAME}_lib

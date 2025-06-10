@@ -21,6 +21,19 @@ keyframe:
   tracking_point_rate: 0.65  
   tracking_parallax_rate: 0.1
 
+ekf:
+  use_ekf: 1  # 0 for factor graph optimization, 1 for EKF
+  process_noise:
+    position: 0.1
+    velocity: 0.1
+    attitude: 0.1
+    bias_acc: 0.1
+    bias_gyro: 0.1
+  measurement_noise:
+    position: 0.1
+    velocity: 0.1
+    attitude: 0.1  
+
 optimization:
   tracking:
     mono_point: 50
